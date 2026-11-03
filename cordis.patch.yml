@@ -1,0 +1,17 @@
+# Layer applied when a profile lists this bundle.
+# Standalone: watches configured roots and syncs them into the mnemon Documents store.
+- insert:
+    - id: mnemon-sync-monitor
+      name: dsh-mnemon-sync-monitor
+      config:
+        enabled: true
+        # Each root is scanned for *.md and synced by relative path.
+        roots: []
+        # debounce window for coalescing rapid writes, ms
+        debounceMs: 800
+        # ignore files smaller than this (bytes)
+        minBytes: 200
+        # archive store records whose source file disappeared
+        prune: false
+        # dry-run: detect and report, never write
+        dryRun: false
