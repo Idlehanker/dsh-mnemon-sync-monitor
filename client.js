@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
 
     /** The watched-roots manager. */
     function SyncMonitorSection() {
-      const [state, setState] = React.useState({ loading: true, roots: [], store: null, patch: null })
+      const [state, setState] = React.useState({ loading: true, roots: [], store: null, patch: null, env: null, attempts: [] })
       const [draft, setDraft] = React.useState('')
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
@@ -85,7 +85,14 @@ window.__ModuleLoader__.load({
       const load = React.useCallback(async () => {
         try {
           const body = await api('/state')
-          setState({ loading: false, roots: body.roots ?? [], store: body.store ?? null, patch: body.patch ?? null })
+          setState({
+            loading: false,
+            roots: body.roots ?? [],
+            store: body.store ?? null,
+            patch: body.patch ?? null,
+            env: body.env ?? null,
+            attempts: body.attempts ?? [],
+          })
           setError(null)
         } catch (loadError) {
           setState((previous) => ({ ...previous, loading: false }))
@@ -184,6 +191,18 @@ window.__ModuleLoader__.load({
           state.patch === null
             ? h('span', null, '未找到 profile 配置文件：改动无法持久化')
             : h('span', null, '配置写入：' + state.patch),
+          // Show why resolution failed, so a report says "env never arrived" or
+          // "file missing" instead of leaving the reader to guess.
+          state.patch === null && state.env !== null
+            ? h('span', { style: { fontSize: 11, opacity: 0.75 } },
+                '诊断 · DSH_HOME=' + String(state.env.DSH_HOME)
+                + ' · DSH_PROFILE=' + String(state.env.DSH_PROFILE)
+                + ' · DSH_PROFILE_DIR=' + String(state.env.DSH_PROFILE_DIR))
+            : null,
+          state.patch === null && state.attempts.length > 0
+            ? h('span', { style: { fontSize: 11, opacity: 0.75 } },
+                '尝试路径：' + state.attempts.map((a) => a.source + (a.exists ? '(存在)' : '(不存在)')).join(' / '))
+            : null,
           state.store === null ? null : h('span', null, '档案存储：' + state.store),
           h('span', null, '注意：新同步的内容需要重开会话才能在检索中看到。'),
         ),
