@@ -18,6 +18,7 @@
   "main": "lib/index.js",
   "files": [
     "lib",
+    "client.js",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -28,6 +29,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "scripts": {
@@ -43,5 +50,10 @@
   "homepage": "https://github.com/Idlehanker/dsh-mnemon-sync-monitor#readme",
   "bugs": {
     "url": "https://github.com/Idlehanker/dsh-mnemon-sync-monitor/issues"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
   }
 }

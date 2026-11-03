@@ -49,6 +49,30 @@ Then configure the roots to watch in your profile's `cordis.patch.yml`:
 
 Restart DSH. The plugin reconciles each root once at startup, then follows changes.
 
+
+## Settings page
+
+The bundle ships a Client half: a **Settings → 知识库同步** page listing every watched root.
+
+| Action | Effect |
+|---|---|
+| See roots | Each row shows the path, whether it exists, and its Markdown count |
+| Add | Validates the path is an existing directory, then starts watching it immediately |
+| Remove | Stops watching; documents already synced stay in the store |
+| Rescan | Runs one reconciliation pass over every watched root now |
+
+The page writes through the Host route `/mnemon-sync-monitor`, which owns the connection trust fence. Edits are persisted into the plugin's own row in the profile `cordis.patch.yml`, and **every other line of that file is preserved byte for byte** — the writer replaces only the `roots:` sequence rather than re-serializing the YAML, so comments and neighbouring rows survive.
+
+Adding or removing a root takes effect without a restart: the watcher is attached or detached live. The configuration file is still updated so the change survives the next boot.
+
+### API
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/mnemon-sync-monitor/state` | Roots with existence and Markdown counts, store path, patch path |
+| POST | `/mnemon-sync-monitor/roots` | Add `{root}`; 400 invalid, 409 duplicate |
+| POST | `/mnemon-sync-monitor/roots/remove` | Remove `{root}`; 404 unknown |
+| POST | `/mnemon-sync-monitor/rescan` | Reconcile all roots now |
 ## Configuration
 
 | Field | Default | Meaning |
@@ -79,9 +103,10 @@ dsh-mnemon pins Project Documents into a View **when the session starts** (the r
 ## Development
 
 ```sh
-node --test "test/*.test.js"   # 11 unit tests, no dependencies
+node --test "test/*.test.js"   # 20 unit tests, no dependencies
 node test/e2e.mjs              # end-to-end watcher test
-node test/live.mjs             # validate against a real knowledge base
+node test/route.e2e.mjs        # REST route round trip
+node test/live.mjs <kb-root>   # validate against a real knowledge base
 ```
 
 No runtime dependencies. Node 22+ (uses `fs.watch` with `recursive`).
