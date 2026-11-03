@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { writeRoots } from '../lib/persist.js'
+import { readRoots, writeRoots } from '../lib/persist.js'
 import { validateRoot, countMarkdown } from '../lib/server.js'
 
 /** Create a patch file with a plugin row. */
@@ -97,4 +97,37 @@ test('countMarkdown counts nested files and skips excluded dirs', () => {
   mkdirSync(git)
   writeFileSync(join(git, 'd.md'), 'x')
   assert.equal(countMarkdown(base), 2)
+})
+test('readRoots returns what writeRoots stored', () => {
+  const path = patchWith(BASE)
+  writeRoots(path, ['C:\\a\\one', 'C:\\b\\two'])
+  const roots = readRoots(path)
+  assert.equal(roots.length, 2)
+  assert.equal(roots[0], 'C:\\a\\one')
+  assert.equal(roots[1], 'C:\\b\\two')
+})
+
+test('readRoots returns empty when roots are cleared', () => {
+  const path = patchWith(BASE)
+  writeRoots(path, [])
+  assert.deepEqual(readRoots(path), [])
+})
+
+test('readRoots returns empty when the row is absent', () => {
+  const path = patchWith('- id: other\n  name: other\n')
+  assert.deepEqual(readRoots(path), [])
+})
+
+test('readRoots reads a hand-written unquoted block', () => {
+  const path = patchWith([
+    '- id: mnemon-sync-monitor',
+    '  name: dsh-mnemon-sync-monitor',
+    '  config:',
+    '    roots:',
+    '      - C:\\manual\\one',
+    '      - D:\\other',
+    '    debounceMs: 800',
+    '',
+  ].join('\n'))
+  assert.deepEqual(readRoots(path), ['C:\\manual\\one', 'D:\\other'])
 })
