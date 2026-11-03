@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { readRoots, writeRoots } from '../lib/persist.js'
-import { validateRoot, countMarkdown } from '../lib/server.js'
+import { validateRoot, countMarkdown, resolveProfilePatch } from '../lib/server.js'
 
 /** Create a patch file with a plugin row. */
 function patchWith(content) {
@@ -139,4 +139,48 @@ test('writeRoots is a no-op when the roots already match semantically', () => {
   const second = writeRoots(path, ['C:\\a\\one'])
   assert.equal(second.changed, false)
   assert.equal(readFileSync(path, 'utf8'), afterFirst)
+})
+test('resolveProfilePatch finds the profile that installed this bundle', () => {
+  const home = mkdtempSync(join(tmpdir(), 'home-'))
+  const profile = join(home, 'profiles', 'demo')
+  mkdirSync(profile, { recursive: true })
+  const patch = join(profile, 'cordis.patch.yml')
+  writeFileSync(patch, '- insert:\n    - id: mnemon-sync-monitor\n      name: dsh-mnemon-sync-monitor\n', 'utf8')
+
+  const saved = { home: process.env.DSH_HOME, dir: process.env.DSH_PROFILE_DIR, profile: process.env.DSH_PROFILE }
+  delete process.env.DSH_PROFILE_DIR
+  delete process.env.DSH_PROFILE
+  process.env.DSH_HOME = home
+  try {
+    // No profile name given: the scan must find the only profile listing this plugin.
+    assert.equal(resolveProfilePatch(), patch)
+  } finally {
+    process.env.DSH_HOME = saved.home
+    if (saved.dir === undefined) delete process.env.DSH_PROFILE_DIR
+    else process.env.DSH_PROFILE_DIR = saved.dir
+    if (saved.profile === undefined) delete process.env.DSH_PROFILE
+    else process.env.DSH_PROFILE = saved.profile
+  }
+})
+
+test('resolveProfilePatch combines DSH_HOME and DSH_PROFILE', () => {
+  const home = mkdtempSync(join(tmpdir(), 'home2-'))
+  const profile = join(home, 'profiles', 'named')
+  mkdirSync(profile, { recursive: true })
+  const patch = join(profile, 'cordis.patch.yml')
+  writeFileSync(patch, '- id: x\n', 'utf8')
+
+  const saved = { home: process.env.DSH_HOME, profile: process.env.DSH_PROFILE, dir: process.env.DSH_PROFILE_DIR }
+  delete process.env.DSH_PROFILE_DIR
+  process.env.DSH_HOME = home
+  process.env.DSH_PROFILE = 'named'
+  try {
+    assert.equal(resolveProfilePatch(), patch)
+  } finally {
+    process.env.DSH_HOME = saved.home
+    if (saved.profile === undefined) delete process.env.DSH_PROFILE
+    else process.env.DSH_PROFILE = saved.profile
+    if (saved.dir === undefined) delete process.env.DSH_PROFILE_DIR
+    else process.env.DSH_PROFILE_DIR = saved.dir
+  }
 })
