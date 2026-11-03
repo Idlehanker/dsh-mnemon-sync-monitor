@@ -131,3 +131,12 @@ test('readRoots reads a hand-written unquoted block', () => {
   ].join('\n'))
   assert.deepEqual(readRoots(path), ['C:\\manual\\one', 'D:\\other'])
 })
+test('writeRoots is a no-op when the roots already match semantically', () => {
+  const path = patchWith(BASE)
+  writeRoots(path, ['C:\\a\\one'])
+  const afterFirst = readFileSync(path, 'utf8')
+  // The stored form may quote the path; a second identical call must not rewrite.
+  const second = writeRoots(path, ['C:\\a\\one'])
+  assert.equal(second.changed, false)
+  assert.equal(readFileSync(path, 'utf8'), afterFirst)
+})
