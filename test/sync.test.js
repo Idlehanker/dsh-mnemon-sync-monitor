@@ -184,3 +184,30 @@ test('legacy records from another root are not adopted', () => {
   assert.equal(plan.create.length, 1, 'mine.md is new to this root')
   assert.equal(plan.archive.length, 0, 'the other root record must not be archived')
 })
+test('created records carry a managed relativePath', () => {
+  const { source, store } = workspace()
+  writeSource(source, 'rel.md', LONG)
+  const documents = new DocumentsStore(store)
+  documents.apply(planSync({ root: source, index: documents.readIndex(), minBytes: 10, prune: false }))
+
+  const record = documents.readIndex().documents[0]
+  // The Documents Source resolves <storageRoot>/<relativePath> and throws
+  // "unsafe managed path" when the result escapes <storageRoot>/documents.
+  // An empty value resolves to the storage root, so every record must set it.
+  assert.equal(typeof record.relativePath, 'string')
+  assert.notEqual(record.relativePath, '')
+  assert.ok(record.relativePath.startsWith('documents/active/'))
+  assert.ok(record.relativePath.endsWith(record.filename))
+})
+
+test('updated records keep a managed relativePath', () => {
+  const { source, store } = workspace()
+  writeSource(source, 'keep.md', LONG)
+  const documents = new DocumentsStore(store)
+  documents.apply(planSync({ root: source, index: documents.readIndex(), minBytes: 10, prune: false }))
+  writeSource(source, 'keep.md', LONG + ' changed')
+  documents.apply(planSync({ root: source, index: documents.readIndex(), minBytes: 10, prune: false }))
+
+  const record = documents.readIndex().documents[0]
+  assert.ok(record.relativePath.startsWith('documents/active/'))
+})
