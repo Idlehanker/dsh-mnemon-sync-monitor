@@ -148,3 +148,39 @@ test('index content hash matches the stored body', () => {
   const file = readFileSync(join(store, 'active', record.filename), 'utf8')
   assert.equal(sha256(stripFrontmatter(file).trim()), record.contentHash)
 })
+test('legacy bare-path records are adopted, not duplicated', () => {
+  const { source, store } = workspace()
+  writeSource(source, 'legacy.md', LONG)
+  const documents = new DocumentsStore(store)
+
+  // Simulate a store written by an older tool: bare relative path, no root encoding.
+  const plan = planSync({ root: source, index: documents.readIndex(), minBytes: 10, prune: false })
+  documents.apply(plan)
+  const index = documents.readIndex()
+  const record = index.documents[0]
+  const body = readFileSync(join(store, 'active', record.filename), 'utf8')
+  index.documents[0] = { ...record, sourcePaths: ['legacy.md'] }
+  documents.writeIndex(index)
+
+  const again = planSync({ root: source, index: documents.readIndex(), minBytes: 10, prune: false })
+  assert.equal(again.create.length, 0, 'must adopt the legacy record, not create a duplicate')
+  assert.equal(again.update.length, 0, 'content is unchanged, so no update either')
+})
+
+test('legacy records from another root are not adopted', () => {
+  const { source, store } = workspace()
+  const other = join(source, '..', 'other-kb-2')
+  mkdirSync(other, { recursive: true })
+  writeSource(source, 'mine.md', LONG)
+  writeSource(other, 'theirs.md', LONG)
+  const documents = new DocumentsStore(store)
+  documents.apply(planSync({ root: other, index: documents.readIndex(), minBytes: 10, prune: false }))
+  const index = documents.readIndex()
+  // Rewrite as a legacy bare path that does not exist under \`source\`.
+  index.documents[0] = { ...index.documents[0], sourcePaths: ['theirs.md'] }
+  documents.writeIndex(index)
+
+  const plan = planSync({ root: source, index: documents.readIndex(), minBytes: 10, prune: true })
+  assert.equal(plan.create.length, 1, 'mine.md is new to this root')
+  assert.equal(plan.archive.length, 0, 'the other root record must not be archived')
+})
