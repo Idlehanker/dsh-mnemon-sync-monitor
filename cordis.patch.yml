@@ -15,3 +15,23 @@
         prune: false
         # dry-run: detect and report, never write
         dryRun: false
+        # Semantic distillation into Memory Space.
+        #
+        # The block MUST exist in the profile: a profile row REPLACES this whole
+        # config object, and writeDistillEnabled() can only flip a switch that
+        # already has somewhere to live. Without it the Settings switch fails with
+        # "distill block missing from profile patch" and distillation never runs.
+        distill:
+          enabled: false
+          automatic: true
+          debounceMs: 30000
+          maxFilesPerRun: 10
+          maxInsightsPerFile: 4
+          # Command that turns note text into insights. It reads
+          # {"messages":[...]} on stdin and writes the completion to stdout.
+          # Single-quoted: double quotes make YAML read a backslash-U as an escape
+          # and the profile fails to load.
+          command: ''
+        # Command timeout, ms. Measure before lowering it: a slow free model can
+        # take minutes on a long note and will time out before it contributes.
+        commandTimeoutMs: 300000
