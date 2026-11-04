@@ -72,6 +72,20 @@ window.__ModuleLoader__.load({
       error: { fontSize: 12, color: 'var(--dsw-alias-danger, #d9534f)', margin: 0 },
       empty: { fontSize: 13, opacity: 0.7, padding: '12px 0' },
       footer: { fontSize: 12, opacity: 0.6, display: 'flex', flexDirection: 'column', gap: 2 },
+      section: {
+        display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px',
+        border: '1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,0.28))',
+        borderRadius: 8,
+      },
+      sectionTitle: { margin: 0, fontSize: 13, fontWeight: 600 },
+      switchRow: { display: 'flex', alignItems: 'center', gap: 10 },
+      switchLabel: { fontSize: 13, cursor: 'pointer', userSelect: 'none' },
+      checkbox: { width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--dsw-alias-accent, #4d6bfe)' },
+      select: {
+        flex: 1, padding: '8px 10px', fontSize: 13, borderRadius: 6,
+        border: '1px solid var(--dsw-alias-border-secondary, rgba(128,128,128,0.28))',
+        background: 'transparent', color: 'inherit',
+      },
     }
 
     /** The watched-roots manager. */
@@ -81,6 +95,12 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
       const [notice, setNotice] = React.useState(null)
+      // The model list comes ONLY from /models, which is the same ctx.llm catalog
+      // the main composer's model picker renders. No second list is kept here.
+      const [models, setModels] = React.useState([])
+      const [selectedModel, setSelectedModel] = React.useState(null) // { provider, model } | null
+      const [pendingModel, setPendingModel] = React.useState('')
+      const [distillEnabled, setDistillEnabled] = React.useState(false)
 
       const load = React.useCallback(async () => {
         try {
@@ -93,6 +113,9 @@ window.__ModuleLoader__.load({
             env: body.env ?? null,
             attempts: body.attempts ?? [],
           })
+          if (body.distill && typeof body.distill.enabled === 'boolean') {
+            setDistillEnabled(body.distill.enabled)
+          }
           setError(null)
         } catch (loadError) {
           setState((previous) => ({ ...previous, loading: false }))
@@ -100,7 +123,56 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      React.useEffect(() => { load() }, [load])
+      const loadModels = React.useCallback(async () => {
+        try {
+          const body = await api('/models')
+          const list = body.models ?? []
+          setModels(list)
+          const selected = body.selected ?? null
+          setSelectedModel(selected)
+          setPendingModel(selected === null ? '' : JSON.stringify([selected.provider, selected.model]))
+        } catch (modelError) {
+          // A provider outage must not hide the roots manager; show the reason in
+          // the model section instead of failing the whole page.
+          setModels([])
+          setError((previous) => previous ?? ('模型列表加载失败：' + modelError.message))
+        }
+      }, [])
+
+      React.useEffect(() => { load(); loadModels() }, [load, loadModels])
+
+      const toggleEnabled = async (next) => {
+        if (busy) return
+        setBusy(true); setError(null); setNotice(null)
+        try {
+          const body = await api('/enabled', {
+            method: 'POST',
+            body: JSON.stringify({ enabled: next }),
+          })
+          // Trust the Host's response, not the optimistic value: a failed
+          // persist must not show a switch that is actually still off.
+          setDistillEnabled(typeof body.status?.enabled === 'boolean' ? body.status.enabled : next)
+          setNotice(next ? '蒸馏已开启，后续知识库变更将自动入库' : '蒸馏已关闭，待执行的调度已取消')
+          await load()
+        } catch (toggleError) {
+          setError(toggleError.message)
+        } finally { setBusy(false) }
+      }
+
+      const saveModel = async () => {
+        if (busy) return
+        setBusy(true); setError(null); setNotice(null)
+        try {
+          await api('/model', {
+            method: 'POST',
+            body: JSON.stringify({ value: pendingModel === '' ? null : pendingModel }),
+          })
+          setNotice('模型已切换；后续蒸馏调用立即生效，无需重启')
+          await loadModels()
+        } catch (saveError) {
+          setError(saveError.message)
+        } finally { setBusy(false) }
+      }
 
       const add = async () => {
         const value = draft.trim()
@@ -167,6 +239,63 @@ window.__ModuleLoader__.load({
                 ),
               )),
 
+        // Distillation model picker. Options come from the composer's own
+        // catalog (ctx.llm), the same list shown under the main input box.
+        // Switching persists to the profile patch, so it survives restarts.
+        // Master switch for the distillation sidecar. Flips the live value in the
+        // Host, so no restart is needed; the choice is also persisted.
+        h('div', { style: styles.switchRow },
+          h('input', {
+            type: 'checkbox',
+            style: styles.checkbox,
+            checked: distillEnabled,
+            disabled: busy,
+            onChange: (event) => toggleEnabled(event.target.checked),
+            title: '开启后，知识库变更会经模型蒸馏写入 Memory Space',
+          }),
+          h('span', { style: styles.switchLabel },
+            distillEnabled ? '语义蒸馏：已开启' : '语义蒸馏：已关闭'),
+          h('span', { style: styles.meta },
+            distillEnabled ? '变更自动入库' : '仅同步 Documents'),
+        ),
+
+        h('div', { style: styles.section },
+          h('p', { style: styles.sectionTitle }, '语义蒸馏模型'),
+          h('p', { style: styles.hint },
+            '知识库变更后用该模型把笔记蒸馏成结论写入 Memory Space。模型列表与主输入框底部同源；provider 变更导致模型下架时在此切换即可，无需改配置文件。'),
+          h('div', { style: styles.inputRow },
+            h('select', {
+              style: styles.select,
+              value: pendingModel,
+              onChange: (event) => setPendingModel(event.target.value),
+              disabled: busy || models.length === 0,
+            },
+              h('option', { value: '' }, '跟随页面默认（推荐：当前免费模型）'),
+              ...models.map((entry) =>
+                h('option', { key: entry.value, value: entry.value },
+                  '[' + entry.providerName + '] ' + entry.name + ' · ' + entry.model),
+              ),
+            ),
+            h('button', {
+              style: { ...styles.button, ...styles.primary },
+              onClick: saveModel,
+              disabled: busy || models.length === 0,
+            }, '保存模型'),
+            h('button', {
+              style: styles.button,
+              onClick: loadModels,
+              disabled: busy,
+              title: 'provider 变化后重新拉取可用模型',
+            }, '刷新'),
+          ),
+          selectedModel === null
+            ? h('span', { style: styles.hint }, '当前：跟随默认')
+            : h('span', { style: styles.hint },
+                '当前：' + selectedModel.provider + '/' + selectedModel.model),
+          models.length === 0
+            ? h('span', { style: styles.error }, '当前没有可用模型，请检查主输入框的模型列表。')
+            : null,
+        ),
         h('div', { style: styles.inputRow },
           h('input', {
             style: styles.input,
