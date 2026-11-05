@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.3
+
+The rescan button moved out of the input row.
+
+### Changed
+
+- **「立即扫描」 now sits in the watched-list header**, next to the list it
+  operates on, instead of beside the path field. It re-scans the roots that are
+  already being watched and never reads the text box - the route takes no body at
+  all - but sharing a row with 添加 invited the reading "scan the path I just
+  typed". The button is disabled when nothing is watched.
+- A one-line hint under the field states the split: 添加 scans the directory it
+  adds, 「立即扫描」 only covers the already-watched list.
+- The button reports 扫描中… while a scan is in flight, so a slow pass over a
+  2,897-file vault does not look like a dead click.
+
+### Added
+
+- `test/rescan-scope.test.js` pins the semantics three ways: only configured
+  roots are scanned, the client sends no body, and the button renders in the list
+  header rather than the input row.
+
 ## 0.5.2
 
 The activity log scrolled while the coverage number never moved.

@@ -1259,6 +1259,17 @@ window.__ModuleLoader__.load({
           h(GroupHead, {
             title: '知识库监听',
             meta: roots.length === 0 ? '尚未监听' : (roots.length + ' 个目录 · ' + totalDocs + ' 篇 md'),
+            // The rescan lives HERE, not beside the path input. It acts on every
+            // root already being watched and never reads the text field, so
+            // sitting it next to 添加 invited the reading "scan the path I just
+            // typed". Same row as the list it operates on makes the scope visible.
+            right: h(Button, {
+              disabled: busy || roots.length === 0,
+              onClick: rescan,
+              title: roots.length === 0
+                ? '尚未监听任何目录'
+                : '重新扫描全部 ' + roots.length + ' 个已监听目录（不影响下方输入框）',
+            }, busy ? '扫描中…' : '立即扫描'),
           }),
 
           state.loading
@@ -1298,8 +1309,12 @@ window.__ModuleLoader__.load({
               },
             }),
             h(Button, { variant: 'primary', disabled: busy || draft.trim() === '', onClick: add, style: { flex: '0 0 auto' } }, '添加'),
-            h(Button, { disabled: busy, onClick: rescan, title: '立即重新扫描所有已监听目录', style: { flex: '0 0 auto' } }, '立即扫描'),
           ),
+
+          // Spelled out because the two actions sit in one card: 添加 acts on the
+          // field above, 立即扫描 on the list. Adding already triggers a scan.
+          h('span', { style: { fontSize: 11, lineHeight: '16px', color: C.text3 } },
+            '添加后会自动扫描该目录；上方的「立即扫描」只针对已监听的目录，与输入框无关。'),
 
           error === null ? null : h('div', {
             style: { fontSize: 12, lineHeight: '18px', color: C.danger, padding: '6px 10px',
