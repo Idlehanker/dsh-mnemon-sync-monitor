@@ -20,3 +20,16 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Unit tests
         run: node --test "test/*.test.js"
+      # The e2e files exercise things a unit test cannot: a real HTTP server,
+      # a real SSE stream, and apply() wiring. Two of the shipped defects were
+      # found by these and invisible to the unit suite.
+      - name: End-to-end
+        run: |
+          node test/live-events.e2e.mjs
+          node test/http-events.e2e.mjs
+          node test/live-loop.e2e.mjs
+          node test/apply-wiring.mjs
+      # The installer refuses a tree whose siblings do not agree. Running it in
+      # dry-run mode catches a partially updated shipment before release.
+      - name: Verify install integrity
+        run: node scripts/install.mjs --dry-run
