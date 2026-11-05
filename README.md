@@ -397,7 +397,9 @@ HMR watcher on refresh.
 ## Development
 
 ```sh
-node --test "test/*.test.js"   # unit tests, no dependencies (sync, persist, events, routes, progress)
+node --test "test/*.test.js"   # unit tests, no dependencies
+                                  # (sync, persist, distill, ledger, events, routes, progress,
+                                  #  effort, imports, client-frames)
 node test/e2e.mjs              # end-to-end watcher test
 node test/route.e2e.mjs        # REST route round trip
 node test/live.mjs <kb-root>   # validate against a real knowledge base
