@@ -25,7 +25,7 @@
  */
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, rmSync, renameSync, existsSync, statSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 
@@ -109,13 +109,18 @@ const dryRun = process.argv.includes('--dry-run')
 const PROFILE = join(homedir(), '.dsh', 'profiles', profileName)
 const TARGET = join(PROFILE, 'node_modules', 'dsh-mnemon-sync-monitor')
 
-if (!existsSync(PROFILE)) {
+const files = shipment()
+// --dry-run is a SOURCE-INTEGRITY CHECK and must work anywhere: CI has no DSH
+// profile, and failing there made the check unusable exactly where it is most
+// valuable. Verify in a scratch directory; only a real install needs a profile.
+const staging = dryRun
+  ? join(tmpdir(), 'dsh-mnemon-sync-monitor.verify-' + process.pid)
+  : join(PROFILE, 'node_modules', '.dsh-mnemon-sync-monitor.staging')
+
+if (!dryRun && !existsSync(PROFILE)) {
   console.error('profile not found: ' + PROFILE)
   process.exit(1)
 }
-
-const files = shipment()
-const staging = join(PROFILE, 'node_modules', '.dsh-mnemon-sync-monitor.staging')
 
 try {
   rmSync(staging, { recursive: true, force: true })
