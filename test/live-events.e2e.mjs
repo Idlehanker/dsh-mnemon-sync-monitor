@@ -64,6 +64,10 @@ const report = await runDistillPass({
     insights: [{ content: '这是一条自洽的、可以独立成立的结论内容。', category: 'fact', importance: 3 }],
   }),
   maxFilesPerRun: 2,
+  // Pinned to one worker: this script is about the transport (frames reaching a
+  // subscriber), and strict start/done alternation is only guaranteed serially.
+  // The concurrent shape is asserted at the end.
+  concurrency: 1,
   onEvent: (event) => {
     seen.push(event)
     if (event.type === 'note-start') {
@@ -98,6 +102,26 @@ assert.ok(hello.data.recent.length > 0, 'late subscriber gets replayed activity'
 
 res.emit('close')
 assert.equal(hub.subscriberCount, 1, 'closing one stream leaves the other attached')
+
+// The concurrent shape, on the same vault: two workers overlap, so the events
+// interleave and each carries the in-flight set the panel renders.
+const concurrent = []
+const concurrentReport = await runDistillPass({
+  roots: [vault],
+  store: mkdtempSync(join(tmpdir(), 'dsh-events-e2e-store2-')),
+  complete: async () => JSON.stringify({
+    insights: [{ content: '并发场景下的结论同样可以独立成立，且足够长。', category: 'fact', importance: 3 }],
+  }),
+  maxFilesPerRun: 2,
+  concurrency: 2,
+  onEvent: (event) => concurrent.push(event),
+})
+assert.equal(concurrentReport.files, 2, 'both notes distilled concurrently')
+const concurrentStarts = concurrent.filter((e) => e.type === 'note-start')
+assert.equal(concurrentStarts.length, 2)
+assert.deepEqual(concurrentStarts.map((e) => e.active), [1, 2], 'the second start sees both in flight')
+assert.equal(concurrentStarts[1].files.length, 2, 'the in-flight set is carried on the event')
+assert.equal(concurrent.filter((e) => e.type === 'note-done').length, 2, 'both finish')
 
 rmSync(sandbox, { recursive: true, force: true })
 console.log('live-events e2e: PASS')
