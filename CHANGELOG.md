@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.5.4
+
+并发蒸馏: several notes distil at once, under a bound.
+
+A pass used to be a strictly serial `await` inside a `for` loop — one model call per
+note, each taking 7–25 s. Walking a 389-file vault takes ~0.4 s (a full import of 326
+documents measured 362 ms), so essentially the whole wall-clock cost of a pass was
+one socket waiting at a time, and a large vault drained at exactly one note per call
+latency.
+
+### Added
+
+- `distill.concurrency`, default **3**, hard range **1..8**. A value read from the
+  patch file is clamped rather than rejected, so a hand-edited patch file cannot fan
+  out past the ceiling: `1` reproduces 0.5.3 behaviour exactly, down to note order.
+  Authored value wins over the bundle default, same precedence as the other `distill`
+  keys.
+- `GET /mnemon-sync-monitor/concurrency`, returning
+  `{ "concurrency": { "value": 3, "max": 8, "default": 3 } }`, and
+  `POST /mnemon-sync-monitor/concurrency` taking `{ "concurrency": 3 }` and replying
+  `{ "concurrency": 3, "status": {...} }`. A non-integer or out-of-range value is
+  **400** `invalid-concurrency`: the route rejects instead of clamping, so a page that
+  asked for 12 is never left showing 12 while 8 is in force.
+- `live.current.active` (how many notes are in flight) and `live.current.files`
+  (`{file, bytes, startedAt}` per note) on the `/events` and `/state` payloads, so a
+  page can show which notes are running concurrently. `live.current.file` is kept for
+  compatibility and names the most recently started note.
+- `/state` also reports top-level `concurrency`, `concurrencyMax`,
+  `concurrencyDefault`.
+- **并发蒸馏** control on the Settings page: a segmented row (1/2/3/4/6/8) under
+  思考等级, plus a **`N 个 Agent 并行`** pill and the list of running notes in the live
+  activity panel.
+
+### Changed
+
+- A note's insights are still persisted by that note's own `mnemon import`, and the
+  ledger entry is still written only **after** the write succeeds — a failed call
+  leaves the note pending for the next pass, unchanged. Content-key dedupe still
+  spans the whole pass, now across workers. `maxFilesPerRun` still caps the notes one
+  pass touches. The vault scan, the ledger save and the coverage total stay
+  single-threaded.
+- Changing the value applies from the next note onward; no restart and no reload.
+
 ## 0.5.3
 
 The rescan button moved out of the input row.

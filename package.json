@@ -1,6 +1,6 @@
 {
   "name": "dsh-mnemon-sync-monitor",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Real-time file watcher that keeps dsh-mnemon Project Documents in sync with local Markdown knowledge bases.",
   "keywords": [
     "deepseek-harness",
@@ -39,7 +39,8 @@
     }
   },
   "scripts": {
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "bench": "node test/bench-concurrency.mjs"
   },
   "dependencies": {},
   "author": "Idlehanker",

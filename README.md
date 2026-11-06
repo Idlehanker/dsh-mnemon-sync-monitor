@@ -111,15 +111,24 @@ The bundle ships a Client half: a **Settings → 知识库同步** page with two
 |---|---|
 | **Switch** | Turns distillation on or off, live |
 | **Model picker** | A provider→model tree; pick which model distils changed notes |
+| **思考等级** | Segmented thinking tier for the distillation call, read from the selected model's capability declaration |
+| **并发蒸馏** | Segmented worker count (1/2/3/4/6/8) — how many notes distil at once; 1 is the serial 0.5.3 loop |
 | **Coverage** | How many notes have distilled content, and how many still do not |
 
-Both distillation controls take effect immediately — no restart. The switch also clears a debounce timer that was already scheduled, so a pass never fires after you switch it off.
+All distillation controls take effect immediately — no restart. The switch also clears a debounce timer that was already scheduled, so a pass never fires after you switch it off.
 
 **实时状态 — pushed, never polled.** The page holds one `EventSource` and nothing
 else. It shows the pass phase (空闲 / 已排队 / 正在蒸馏 / 已完成 / 失败), the file
 currently being distilled and its size, batch progress (`done / planned`), how
 many insights were written, the next scheduled run, the last error, and a
 scrolling activity log. A **立即蒸馏** button starts a pass by hand.
+
+With a worker count above 1, "the file currently being distilled" is no longer one
+file: the activity panel lists every note in flight with its size and start time,
+and shows a **`N 个 Agent 并行`** pill. The payload behind it carries
+`live.current.active` (how many are running) and `live.current.files`
+(`{file, bytes, startedAt}` each); `live.current.file` survives for compatibility,
+naming the most recently started note.
 
 There is no `setInterval` anywhere in the client. The old page called `/state`
 once on mount and never again, so the coverage bar was a snapshot that could not
@@ -139,6 +148,8 @@ The model list is the **same catalog the main composer renders under its input b
 
 **思考等级** (thinking tier) sits directly under the model picker. It is a segmented control, not a menu: the tiers are an ordered cost/quality axis, and a row shows where the current choice sits instead of hiding it behind a click. The entries come from the selected model's own capability declaration, so an unsupported value cannot be selected in the first place. Changing it applies to the very next note — no restart, and a pass already in flight picks it up — and turning the model into a different one re-reads the tiers, because they are a per-model capability.
 
+**并发蒸馏** sits directly under 思考等级 and is segmented for the same reason: it is a short ordered axis, and a row shows the current worker count instead of hiding it in a menu. The options are 1 / 2 / 3 / 4 / 6 / 8 — the low end of the `1..8` range, because 8 is already the ceiling and a dense menu reads faster than a slider whose exact value is invisible. Picking one persists it as `distill.concurrency` and applies from the next note onward; **1** is the strictly serial 0.5.3 loop.
+
 The page writes through the Host route `/mnemon-sync-monitor`, which owns the connection trust fence. Edits are persisted into the plugin's own row in the profile `cordis.patch.yml`, and **every other line of that file is preserved byte for byte** — the writer replaces only the lines it owns rather than re-serializing the YAML, so comments and neighbouring rows survive.
 
 Adding or removing a root takes effect without a restart: the watcher is attached or detached live. The configuration file is still updated so the change survives the next boot.
@@ -148,7 +159,7 @@ Adding or removing a root takes effect without a restart: the watcher is attache
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/mnemon-sync-monitor/events` | **Server-Sent Events.** The page's only ongoing source of truth. Sends `hello` (snapshot + recent activity) on connect, then `state` and `activity` frames |
-| GET | `/mnemon-sync-monitor/state` | Roots with existence and Markdown counts, store path, patch path, distillation status, live pass state and coverage |
+| GET | `/mnemon-sync-monitor/state` | Roots with existence and Markdown counts, store path, patch path, distillation status, live pass state and coverage. Also carries the top-level `concurrency`, `concurrencyMax`, `concurrencyDefault` |
 | GET | `/mnemon-sync-monitor/coverage` | Ledger report only: scanned / distilled / pending per root. Costs no model call |
 | POST | `/mnemon-sync-monitor/roots` | Add `{root}`; 400 invalid, 409 duplicate |
 | POST | `/mnemon-sync-monitor/roots/remove` | Remove `{root}`; 404 unknown |
@@ -158,6 +169,8 @@ Adding or removing a root takes effect without a restart: the watcher is attache
 | POST | `/mnemon-sync-monitor/enabled` | Turn distillation on or off; body `{ enabled }` |
 | GET | `/mnemon-sync-monitor/efforts` | Thinking tiers the **selected model** accepts, its own default, and the current choice |
 | POST | `/mnemon-sync-monitor/effort` | Set the thinking tier; body `{ effort }`, where effort is a tier id or `null` to follow the model default |
+| GET | `/mnemon-sync-monitor/concurrency` | How many notes distil at once, the hard cap, and the default: `{ "concurrency": { "value": 3, "max": 8, "default": 3 } }` |
+| POST | `/mnemon-sync-monitor/concurrency` | Set it; body `{ "concurrency": 3 }` → `{ "concurrency": 3, "status": {…} }`. Anything outside `1..8` or not an integer gets **400** `invalid-concurrency` — rejected, never silently clamped |
 | POST | `/mnemon-sync-monitor/distill` | Start a pass and return **202** at once; progress arrives on `/events`. **409** when one is already running |
 
 ## Configuration
@@ -177,6 +190,7 @@ Adding or removing a root takes effect without a restart: the watcher is attache
 | `distill.debounceMs` | `30000` | Quiet window before distilling. |
 | `distill.maxFilesPerRun` | `10` | **Pending** notes distilled per pass. |
 | `distill.maxInsightsPerFile` | `4` | Insights a single file may yield. |
+| `distill.concurrency` | `3` | Notes distilled **in parallel**. Bounded `1..8`; anything outside is clamped. `1` is 旧行为 — the strictly-serial 0.5.3 loop. |
 | `distill.command` | empty | Shell command for the model call. |
 | `distill.commandTimeoutMs` | `300000` | Ceiling for one model call. |
 | `distill.autoContinue` | `true` | Queue the next pass when one finishes with backlog left, so a large vault drains instead of waiting for a file edit. |
@@ -212,6 +226,7 @@ them.
       debounceMs: 30000
       maxFilesPerRun: 10
       maxInsightsPerFile: 4
+      concurrency: 3
       reasoningEffort: low
       command: 'node C:\path\to\distill-gateway.mjs'
     distillModel: '["workbuddy","hy4free"]'
@@ -315,6 +330,46 @@ declaration through `ctx.llm.resolveModelInfo()`. A model that declares no reaso
 tiers reports `supported: false` and the control says so, instead of offering a menu
 whose values the gateway would reject.
 
+### Distil several notes at once, within a bound
+
+The model call is the whole cost of a pass. Walking a 389-file vault costs about
+**0.4 s** — the same order as the 362 ms it takes to import 326 documents into the
+store — while a single distillation call takes **7–25 s**. A strictly serial loop
+therefore spends ~99% of its wall-clock waiting on one socket at a time, and a large
+vault drains at exactly one note per call latency.
+
+`distill.concurrency` (default **3**, hard range **1..8**) replaces that `await`-in-a-
+`for`-loop with a bounded worker pool:
+
+| Part of the pass | Runs |
+|---|---|
+| Vault walk, cleaning and hashing | once, single-threaded, before any model call |
+| Model call per note | up to `concurrency` in flight |
+| `mnemon import` for that note's insights, and the ledger write that marks it done | per note, inside its own worker — never shared |
+| Ledger save and coverage total | once per root, after the batch |
+
+Nothing about the ordering contract changes. A note still gets its own
+`mnemon import`; a note is recorded in the ledger only **after** its insights are
+persisted, so a failed call leaves it pending and the next pass retries it — the
+self-healing property above is unchanged, and `maxFilesPerRun` still caps how many
+notes a single pass touches. Content-key dedupe still spans the whole pass, so two
+workers that produce the same insight cannot both write it.
+
+The cap is a hard ceiling rather than a hint: a hand-edited patch file cannot fan
+out past 8, because unbounded fan-out spends its gain twice over — each
+`mnemon import` child is its own process loading an embedding model, and a
+rate-limiting provider answers 429s instead of getting faster.
+
+**Choosing a value.** 3 is a good default and hides the per-call latency without
+turning a laptop fan on. Raise toward 6–8 only with a model or gateway that tolerates
+it — a local gateway or a permissive API — or the extra workers only queue at the
+provider: N 个并发 → 约 N 倍（受模型与网络上限约束）. At **1** the behaviour is identical to
+0.5.3, down to the note order.
+
+Changing it applies from the next note onward: no restart, and a pass already in
+flight picks it up. The Settings page exposes the same values as a **并发蒸馏**
+segmented control (1/2/3/4/6/8) right under 思考等级.
+
 ### Measure the model before trusting it
 
 A distillation model has to answer **every** changed note. Measured on the same
@@ -410,6 +465,28 @@ No runtime dependencies. Node 22+ (uses `fs.watch` with `recursive`).
 ## Measured performance
 
 Against a real 389-file Obsidian vault: a full import of 326 documents took **362 ms**.
+
+That is the sync side, not the work. One distillation call runs **7–25 s** on the same
+notes, so the walk and the import together are rounding error next to a single model
+call — which is why the parallelism lives there and nowhere else.
+
+`npm run bench` measures the pool itself with a simulated model latency, so the
+speed-up is isolated from the provider's behaviour. 24 notes, 200 ms per call, one
+representative run (wall clocks move a few percent run to run; the shape does not):
+
+| workers | wall clock | speed-up |
+|---|---|---|
+| 1 | 5045 ms | 1.00× |
+| 2 | 2527 ms | 2.00× |
+| 3 | 1683 ms | 3.00× |
+| 4 | 1251 ms | 4.03× |
+| 6 | 821 ms | 6.14× |
+| 8 | 609 ms | 8.29× |
+
+Scaling is near-linear because the pass is pure socket wait. What it does **not**
+measure is a real vault against a real provider: no end-to-end figure is quoted here,
+because it depends on that provider's rate limit, and at `concurrency: 1` the gain is
+zero by construction.
 
 ## License
 

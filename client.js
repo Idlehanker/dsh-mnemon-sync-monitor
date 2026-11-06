@@ -850,6 +850,82 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** The parallelism tiers. Plain counts, so every label is the number. */
+    const CONCURRENCY_OPTIONS = [1, 2, 3, 4, 6, 8]
+
+    /**
+     * The distillation concurrency selector.
+     *
+     * Same segmented shape as the effort picker, for the same reason: the
+     * choices sit on an ordered speed/cost axis, and a menu would hide that
+     * ordering behind a click. The numbers ARE the labels here — one option is
+     * one worker — so the row reads as a dial, not a list of names.
+     */
+    function ConcurrencyPicker(props) {
+      const busy = props.busy === true || props.disabled === true
+      const current = props.value
+      const onChange = props.onChange
+      const maxKnown = typeof props.max === 'number' && props.max > 0
+      const max = maxKnown ? props.max : 8
+      const options = CONCURRENCY_OPTIONS.filter((count) => count <= max)
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+          h('span', { style: { ...font(13, 500, '20px'), color: C.text2, flex: '0 0 auto' } }, '并发蒸馏'),
+          maxKnown
+            ? h('span', { style: { fontSize: 11, lineHeight: '16px', color: C.text3 } }, '上限 ' + max + ' 个')
+            : null,
+          h('span', { style: { flex: 1 } }),
+          // Distillation runs once per note, so concurrency multiplies a
+          // background cost instead of adding a one-off: tokens buy wall time.
+          h('span', { style: { fontSize: 11, lineHeight: '16px', color: C.text3 } },
+            '同时蒸馏的笔记数，越大越快但更吃额度'),
+        ),
+
+        current === null
+          ? h('div', { style: { ...font(12, 400, '18px'), color: C.text3 } }, '正在读取并发设置…')
+          : h('div', {
+              role: 'radiogroup',
+              'aria-label': '蒸馏并发数',
+              style: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+            },
+              ...options.map((count) => {
+                const selected = current === count
+                return h('button', {
+                  key: count,
+                  type: 'button',
+                  role: 'radio',
+                  'aria-checked': selected,
+                  disabled: busy,
+                  title: count === 1
+                    ? '逐个处理：一结束才开下一篇，最稳也最慢'
+                    : ('同时蒸馏 ' + count + ' 篇笔记'),
+                  onClick: () => { if (!busy && !selected) onChange(count) },
+                  style: {
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '6px 11px', fontSize: 12, lineHeight: '18px',
+                    borderRadius: C.radiusSm, fontFamily: 'inherit',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                    opacity: busy ? 0.6 : 1,
+                    border: '1px solid ' + (selected ? C.accent : C.strokeSoft),
+                    background: selected ? C.accentSoft : C.inset,
+                    color: selected ? C.accentText : C.text2,
+                    fontWeight: selected ? 600 : 400,
+                    transition: 'background 140ms ease, border-color 140ms ease',
+                  },
+                },
+                  String(count),
+                  selected ? h(CheckMark, null) : null,
+                )
+              }),
+            ),
+
+        h('p', { style: { ...font(11, 400, '16px'), color: C.text3, margin: 0 } },
+          '并发只作用于排队中的笔记：设为 1 时逐个处理（最稳），数值越高越吃模型额度。'
+          + '改动从下一篇笔记起生效，正在进行的那一批不受影响，无需重启。'),
+      )
+    }
+
     /**
      * The live activity panel.
      *
@@ -869,6 +945,14 @@ window.__ModuleLoader__.load({
       const coverage = live === null ? null : (live.coverage || null)
       const budget = live === null ? null : (live.budget || null)
       const current = live === null ? null : (live.current || null)
+      // In-flight files, newest-to-oldest as the Host listed them. A Host that
+      // predates the worker pool sends none, and one in-flight note is still
+      // the single line below, so both shapes keep the old rendering.
+      const files = current !== null && Array.isArray(current.files) ? current.files : []
+      const parallel = files.length > 1
+      const activeCount = current !== null && typeof current.active === 'number'
+        ? current.active
+        : files.length
 
       // A pass in flight is worth showing even when the coverage number cannot
       // move yet; without this the pane looks dead for the whole first batch.
@@ -918,22 +1002,48 @@ window.__ModuleLoader__.load({
           }, running ? '蒸馏中…' : '立即蒸馏'),
         ),
 
-        current === null ? null : h('div', {
-          style: {
-            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 9px',
-            borderRadius: C.radiusSm, background: C.inset,
-          },
-        },
-          h('span', { style: { fontSize: 11, color: C.text3, flex: '0 0 auto' } }, '当前文件'),
-          h('span', {
-            style: {
-              flex: 1, minWidth: 0, fontSize: 12, fontFamily: C.mono, color: C.text,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        // One note in flight is the old single line, unchanged; several means a
+        // worker pool is running, so each in-flight note gets its own row and
+        // the header names how many Agents are busy.
+        current === null ? null : parallel
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 5 } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                h('span', { style: { fontSize: 11, color: C.text3 } }, '当前文件'),
+                h(Pill, { tone: 'accent' }, activeCount + ' 个 Agent 并行'),
+              ),
+              ...files.map((entry) => h('div', {
+                key: entry.file,
+                style: {
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '6px 9px',
+                  borderRadius: C.radiusSm, background: C.inset,
+                },
+              },
+                h('span', {
+                  style: {
+                    flex: 1, minWidth: 0, fontSize: 12, fontFamily: C.mono, color: C.text,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  },
+                  title: entry.file,
+                }, entry.file),
+                entry.bytes === undefined ? null : h(Pill, { tone: 'muted' }, entry.bytes + ' B'),
+              )),
+            )
+          : h('div', {
+              style: {
+                display: 'flex', alignItems: 'center', gap: 8, padding: '6px 9px',
+                borderRadius: C.radiusSm, background: C.inset,
+              },
             },
-            title: current.file,
-          }, current.file),
-          current.bytes === undefined ? null : h(Pill, { tone: 'muted' }, current.bytes + ' B'),
-        ),
+              h('span', { style: { fontSize: 11, color: C.text3, flex: '0 0 auto' } }, '当前文件'),
+              h('span', {
+                style: {
+                  flex: 1, minWidth: 0, fontSize: 12, fontFamily: C.mono, color: C.text,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                },
+                title: current.file,
+              }, current.file),
+              current.bytes === undefined ? null : h(Pill, { tone: 'muted' }, current.bytes + ' B'),
+            ),
 
         budget === null ? null : h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
           h(Pill, { tone: 'muted' }, '本批 ' + budget.done + ' / ' + budget.planned),
@@ -1018,6 +1128,10 @@ window.__ModuleLoader__.load({
       // Null until /efforts answers; the picker renders a placeholder until then.
       const [effortInfo, setEffortInfo] = React.useState(null)
       const [effort, setEffort] = React.useState(null)
+      // Distillation concurrency: how many notes are distilled in parallel.
+      // Null until /concurrency (or the first state frame) answers.
+      const [concurrency, setConcurrency] = React.useState(null)
+      const [concurrencyMax, setConcurrencyMax] = React.useState(null)
       // Ledger coverage: { scanned, distilled, pending, roots }. Null until the
       // first state frame arrives.
       const [coverage, setCoverage] = React.useState(null)
@@ -1053,6 +1167,14 @@ window.__ModuleLoader__.load({
           }
           if (body.distill && body.distill.live && typeof body.distill.live === 'object') {
             setLive((previous) => previous === null ? body.distill.live : previous)
+          }
+          // Same rule for the parallelism knob: seed it when the page has never
+          // read it, then let /concurrency and the stream own it.
+          if (typeof body.concurrency === 'number') {
+            setConcurrency((previous) => previous === null ? body.concurrency : previous)
+          }
+          if (typeof body.concurrencyMax === 'number') {
+            setConcurrencyMax((previous) => previous === null ? body.concurrencyMax : previous)
           }
           setError(null)
         } catch (loadError) {
@@ -1113,6 +1235,41 @@ window.__ModuleLoader__.load({
         } finally { setBusy(false) }
       }
 
+      /** Read the current parallelism and its ceiling from the Host. */
+      const loadConcurrency = React.useCallback(async () => {
+        try {
+          const body = await api('/concurrency')
+          const info = body.concurrency || null
+          if (info === null) return
+          setConcurrency(typeof info.value === 'number' ? info.value : null)
+          if (typeof info.max === 'number') setConcurrencyMax(info.max)
+        } catch (concurrencyError) {
+          // A failed read must not hide the switch, the model picker or the
+          // effort row; the picker just keeps its placeholder.
+          setError((previous) => previous || ('并发设置加载失败：' + concurrencyError.message))
+        }
+      }, [])
+
+      /** Persist one concurrency choice. Applies from the next note onward. */
+      const saveConcurrency = async (next) => {
+        if (busy) return
+        setBusy(true); setError(null); setNotice(null)
+        try {
+          const body = await api('/concurrency', {
+            method: 'POST',
+            body: JSON.stringify({ concurrency: next }),
+          })
+          // Trust the Host: a rejected write must not leave the row showing a
+          // number that was never persisted.
+          setConcurrency(typeof body.concurrency === 'number' ? body.concurrency : next)
+          setNotice('并发蒸馏已设为 ' + (typeof body.concurrency === 'number' ? body.concurrency : next)
+            + ' 个 Agent，下一篇笔记立即生效')
+          await loadConcurrency()
+        } catch (concurrencyError) {
+          setError(concurrencyError.message)
+        } finally { setBusy(false) }
+      }
+
       // One subscription for the lifetime of the page.
       //
       // The initial /state and /models reads are a ONE-OFF bootstrap: they carry
@@ -1120,7 +1277,8 @@ window.__ModuleLoader__.load({
       // that changes while the page is open - phase, current file, counters,
       // coverage, switch position - arrives on the stream, so there is no timer
       // anywhere in this component.
-      React.useEffect(() => { load(); loadModels(); loadEfforts() }, [load, loadModels, loadEfforts])
+      React.useEffect(() => { load(); loadModels(); loadEfforts(); loadConcurrency() },
+        [load, loadModels, loadEfforts, loadConcurrency])
 
       React.useEffect(() => {
         const unsubscribe = subscribeActivity({
@@ -1144,6 +1302,15 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (live !== null && live.coverage !== undefined && live.coverage !== null) {
           setCoverage(live.coverage)
+        }
+      }, [live])
+
+      // The effective concurrency can change behind the page's back (a config
+      // edit, a clamp to the ceiling). When the stream carries it, the row
+      // follows rather than showing a number that is no longer in force.
+      React.useEffect(() => {
+        if (live !== null && typeof live.concurrency === 'number') {
+          setConcurrency(live.concurrency)
         }
       }, [live])
 
@@ -1383,6 +1550,15 @@ window.__ModuleLoader__.load({
             value: effort,
             busy,
             onChange: saveEffort,
+          }),
+
+          // Sits directly under the effort row: both are per-note cost knobs for
+          // the same background pass, so they belong side by side.
+          h(ConcurrencyPicker, {
+            value: concurrency,
+            max: concurrencyMax,
+            disabled: busy,
+            onChange: saveConcurrency,
           }),
 
           // Live pass panel. Everything here is pushed by the Host; the page has

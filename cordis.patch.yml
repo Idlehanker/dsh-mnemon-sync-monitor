@@ -45,6 +45,15 @@
           # tokens than 'high' at the same claim count. An empty value sends no
           # override at all and lets the model decide.
           reasoningEffort: low
+          # How many notes are distilled at the same time.
+          #
+          # The model call IS the wall clock: walking a 389-file vault costs ~0.4 s,
+          # while one call costs 7-25 s. Run serially, a large backlog spends
+          # essentially all of its time waiting on one socket at a time. 3 keeps
+          # plenty in flight without inviting 429s or starving the Documents sync
+          # that shares this process. 1 is the pre-0.5.4 strictly-serial loop.
+          # Clamped to [1, 8]: a hand-edited 999 becomes 8, never 999 children.
+          concurrency: 3
         # Command timeout, ms. Measure before lowering it: a slow free model can
         # take minutes on a long note and will time out before it contributes.
         commandTimeoutMs: 300000

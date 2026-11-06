@@ -36,7 +36,7 @@ function fakeComplete() {
   return fn
 }
 
-test('the pass reports one event per note, in order, with the file name', async () => {
+test('at concurrency 1 the pass reports one event per note, in order, with the file name', async () => {
   const box = sandbox()
   try {
     note(box.vault, 'a.md', '# A\n\n' + '甲'.repeat(80))
@@ -48,6 +48,9 @@ test('the pass reports one event per note, in order, with the file name', async 
       complete: fakeComplete(),
       maxFilesPerRun: 10,
       maxInsightsPerFile: 2,
+      // Pinned to the legacy serial behaviour: this test is about strict
+      // start/done pairing, which only a single worker can guarantee.
+      concurrency: 1,
       onEvent: (event) => events.push(event),
     })
 
@@ -59,6 +62,9 @@ test('the pass reports one event per note, in order, with the file name', async 
     assert.equal(events[2].file, 'a.md')
     assert.equal(events[2].proposed, 1)
     assert.equal(events[3].file, 'b.md')
+    // With one worker, `active` never leaves 1 and only one file is ever in flight.
+    assert.deepEqual(events.filter((e) => e.type === 'note-start').map((e) => e.active), [1, 1])
+    assert.equal(events[1].files.length, 1)
   } finally {
     rmSync(box.base, { recursive: true, force: true })
   }
@@ -77,6 +83,7 @@ test('note-start is published BEFORE the model call, so a page can name the file
         return JSON.stringify({ insights: [{ content: '一条足够长、能够独立成立的结论内容。', category: 'fact', importance: 3 }] })
       },
       onEvent: (event) => order.push(event.type),
+      concurrency: 1,
     })
     assert.deepEqual(order, ['root', 'note-start', 'model', 'note-done'])
   } finally {
