@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.5.5
+
+Three correctness defects that the concurrency work exposed but did not cause.
+
+All three were present at 0.5.3 and 0.5.4. Auditing how a pass divides its budget and
+how it dedupes claims across workers turned up paths where one note could be distilled
+twice, where a root could be starved pass after pass, and where the same claim could be
+written in two different passes. None is a regression from the worker pool — a single
+worker walks exactly the same code — but parallel work made the doubled model calls and
+the duplicated writes easier to see.
+
+### Fixed
+
+- **One file, one pipeline.** The ledger is keyed on `resolve(root)`, so watching both
+  `.../Vault` and `.../Vault/inner` scanned every note under `inner` twice, under two
+  relative paths (`inner/shared.md` and `shared.md`) against two independent ledgers.
+  Both copies were dispatched and the model was paid twice. Roots are now
+  canonicalised before anything is scanned: the set is de-duplicated by resolved
+  absolute path (case-insensitively on Windows), and a root nested inside another
+  configured root is dropped — the outermost root owns the file. This is
+  order-independent: the ancestor wins whichever order the roots are listed in. The
+  surviving set is what the pass walks, what coverage reports and what the watcher
+  list shows; dropped roots are named as shadowed in the activity log. `POST /roots`
+  refuses to create the situation — adding a root inside an existing root, or one that
+  contains an existing root, returns **409** `overlapping-root` naming the conflicting
+  root — and the settings page persists the canonical set.
+- **The run budget is handed out round-robin.** `maxFilesPerRun` used to be consumed
+  in root-list order before any work started, so with `maxFilesPerRun: 4` a root with 6
+  pending notes took all four slots and a second root with 2 pending got `run budget
+  exhausted, 2 pending` and did nothing — every pass, because the small root sorts
+  after the big one. Each root's pending list is now computed first, then the budget is
+  handed out one note at a time, cycling through the roots in configured order until it
+  is spent, so every root with pending notes gets a share within one pass. A root is
+  left with a zero share only when the total pending across all roots genuinely exceeds
+  `maxFilesPerRun` in a single round, and the next round (`autoContinue`) picks up
+  where this one stopped. A starved root's note now names both numbers.
+- **Duplicate claims are suppressed across roots and across passes.** The dedupe set
+  was a per-pass in-memory `Set` of content keys, so an identical claim produced from
+  two different roots in two different passes was written twice; it only masked
+  duplicates whose wording the model happened to reproduce byte-identically. Accepted
+  content keys are now persisted in `<store>/.distill/claims.json` — shape
+  `{ version: 1, keys: { <contentKey>: { at, root, rel } } }` — written atomically with
+  the same write-then-rename as the per-root ledgers. A pass seeds its dedupe set from
+  that file and adds every claim it accepts to both the set and the file, keyed on the
+  NFKC/whitespace-and-punctuation-stripped hash of the claim text, so the same
+  conclusion is written once no matter which note, which root, or which pass produced
+  it. The file is capped at 20,000 keys and evicts the oldest first. Claims govern
+  writes while the ledger still governs execution: a note that produced only
+  already-known claims is marked done and is not asked again.
+
 ## 0.5.4
 
 并发蒸馏: several notes distil at once, under a bound.

@@ -105,6 +105,19 @@ The bundle ships a Client half: a **Settings → 知识库同步** page with two
 | Remove | Stops watching; documents already synced stay in the store |
 | Rescan | Runs one reconciliation pass over every watched root now |
 
+**One file, one pipeline.** Watching `.../Vault` and `.../Vault/inner` at the same time
+used to mean every note under `inner` was scanned twice, under two relative paths
+(`inner/shared.md` and `shared.md`), against two independent ledgers — both copies were
+dispatched and the model was paid twice. Roots are now canonicalised before anything is
+scanned: the set is de-duplicated by resolved absolute path (case-insensitively on
+Windows), and a root nested inside another configured root is dropped, because the
+**outermost root owns the file**. That rule is order-independent — the ancestor wins
+whichever order the roots were listed in — and the surviving set is what the pass walks,
+what coverage reports and what this list shows. A dropped root is named as *shadowed* in
+the activity log rather than vanishing. Adding an overlapping root is refused outright
+(**409** `overlapping-root`, naming the conflict) instead of being silently absorbed, and
+the settings page persists the canonical set.
+
 **语义蒸馏** — the Memory Space distillation controls.
 
 | Action | Effect |
@@ -161,7 +174,7 @@ Adding or removing a root takes effect without a restart: the watcher is attache
 | GET | `/mnemon-sync-monitor/events` | **Server-Sent Events.** The page's only ongoing source of truth. Sends `hello` (snapshot + recent activity) on connect, then `state` and `activity` frames |
 | GET | `/mnemon-sync-monitor/state` | Roots with existence and Markdown counts, store path, patch path, distillation status, live pass state and coverage. Also carries the top-level `concurrency`, `concurrencyMax`, `concurrencyDefault` |
 | GET | `/mnemon-sync-monitor/coverage` | Ledger report only: scanned / distilled / pending per root. Costs no model call |
-| POST | `/mnemon-sync-monitor/roots` | Add `{root}`; 400 invalid, 409 duplicate |
+| POST | `/mnemon-sync-monitor/roots` | Add `{root}`; 400 invalid, 409 duplicate, **409** `overlapping-root` when the new root is inside an existing one or contains one — the message names the conflicting root |
 | POST | `/mnemon-sync-monitor/roots/remove` | Remove `{root}`; 404 unknown |
 | POST | `/mnemon-sync-monitor/rescan` | Reconcile all roots now |
 | GET | `/mnemon-sync-monitor/models` | The composer's model catalog plus the current selection |
@@ -178,7 +191,7 @@ Adding or removing a root takes effect without a restart: the watcher is attache
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Master switch. |
-| `roots` | `[]` | Absolute directories to watch. Empty disables the plugin. |
+| `roots` | `[]` | Absolute directories to watch. Empty disables the plugin. Overlapping roots are canonicalised to the outermost one — see the Settings page notes. |
 | `storeDirectory` | `~/.mnemon/documents` | Documents store to write into. |
 | `debounceMs` | `800` | Quiet window before reconciling. |
 | `minBytes` | `200` | Files smaller than this are ignored (Logseq empties are often <200 B). |
@@ -188,7 +201,7 @@ Adding or removing a root takes effect without a restart: the watcher is attache
 | `distill.enabled` | `false` | Master switch for the Memory Space distillation. |
 | `distill.automatic` | `true` | Fire a pass from the watcher, not only from the manual route. |
 | `distill.debounceMs` | `30000` | Quiet window before distilling. |
-| `distill.maxFilesPerRun` | `10` | **Pending** notes distilled per pass. |
+| `distill.maxFilesPerRun` | `10` | **Pending** notes distilled per pass. The budget is shared round-robin across roots, one note at a time in configured order, so one busy root cannot take every slot while another starves |
 | `distill.maxInsightsPerFile` | `4` | Insights a single file may yield. |
 | `distill.concurrency` | `3` | Notes distilled **in parallel**. Bounded `1..8`; anything outside is clamped. `1` is 旧行为 — the strictly-serial 0.5.3 loop. |
 | `distill.command` | empty | Shell command for the model call. |
@@ -283,6 +296,37 @@ parses as an *empty* ledger, which means the first pass after upgrading re-check
 note — deliberate, because when we cannot prove what was distilled, redoing it is the
 safe answer.
 
+### Claims are deduped across passes, not just within one
+
+The ledger answers "has this **note** been distilled?". It cannot answer the question the
+Memory Space actually cares about: "has this **conclusion** already been written?" Two
+notes can carry the same conclusion — one copied into a second vault, the same idea in a
+project note and an archive note — and a per-pass in-memory set only catches that when
+both fall inside the same pass *and* the model happens to word them identically.
+
+Accepted claims are therefore persisted in `<store>/.distill/claims.json`:
+
+```json
+{
+  "version": 1,
+  "keys": {
+    "<contentKey>": { "at": "2026-11-06T00:12:00.000Z", "root": "C:\\Users\\me\\vault", "rel": "Anno/CFA.md" }
+  }
+}
+```
+
+The key is the NFKC/whitespace-and-punctuation-stripped hash of the claim text, so
+wrapping and punctuation cannot smuggle a duplicate past it. A pass seeds its dedupe set
+from this file and adds every claim it accepts to both the set and the file, then writes
+the file atomically with the same write-then-rename as the per-root ledgers. The same
+conclusion is written once no matter which note, which root, or which **pass** produced
+it. The file is capped at **20,000 keys**; past that the oldest entries are evicted
+first, which costs at most a re-write of something long forgotten.
+
+Claims govern **writes**; the ledger governs **execution**. A note that produced only
+already-known claims is still marked distilled in its own root ledger and is not asked
+again — the point is to skip the write, not to keep paying for the same model call.
+
 ### One model catalog, two surfaces
 
 The settings page lists models from `GET /models`, which reads the **same**
@@ -352,8 +396,11 @@ Nothing about the ordering contract changes. A note still gets its own
 `mnemon import`; a note is recorded in the ledger only **after** its insights are
 persisted, so a failed call leaves it pending and the next pass retries it — the
 self-healing property above is unchanged, and `maxFilesPerRun` still caps how many
-notes a single pass touches. Content-key dedupe still spans the whole pass, so two
-workers that produce the same insight cannot both write it.
+notes a single pass touches — now handed out round-robin, one note at a time across the
+roots in configured order, so a root with a long backlog cannot consume the whole budget
+and starve a second root pass after pass. Content-key dedupe still spans the whole pass,
+so two workers that produce the same insight cannot both write it; across passes it is
+backed by `claims.json` (see above).
 
 The cap is a hard ceiling rather than a hint: a hand-edited patch file cannot fan
 out past 8, because unbounded fan-out spends its gain twice over — each
